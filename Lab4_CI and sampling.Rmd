@@ -6,11 +6,15 @@ output: github_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(knitr)
+library(tmap)
+library(spatstat)
+library(sf)
 ```
 
 ## Confidence intervals and sampling
 
-**Your name: {Name here}**
+**Your name: {Sam Shuster}**
 
 **Overview:**
 
@@ -30,77 +34,138 @@ For this lab, you will be using the FSSTATUS variable, which describes the food 
 **Question 1 (4 points)** _Filter out all records in this dataset that have missing or NIU observations for food insecurity. Then use group_by and summarise to calculate the number of individuals grouped in each food security category (FSSTATUS).  Call this table using kable. Based on these results, calculate the estimated national food insecurity rate (those rated 2 and 3)._
 
 ```{r}
-#Code goes here
+# single equals sign operator (=) also works in place of <-
+records_present<-cps_data%>%
+  filter(FSSTATUS_cat != "NA")%>%
+  group_by(STATE)%>%
+  summarise(sec_count = sum(FSSTATUS == 1), 
+            lowsec_cnt = sum(FSSTATUS == 2), 
+            vlowsec_cnt = sum(FSSTATUS == 3),
+            )
+
+kable(head(records_present))
+
+totSec=sum(records_present$sec_count)
+totLow=sum(records_present$lowsec_cnt)
+totVLow=sum(records_present$vlowsec_cnt)
+totPop=totSec + totLow + totVLow
+totInsec=totLow+totVLow
+insec_p_hat=totInsec/totPop # this is the "rate" or sample proportion of insecure
+  
 ```
 
 **Question 2 (3 points)** _Using the formula for confidence intervals for proportions shown in class, calculate a confidence interval for the rate you identified in question 1. Make sure that confidence interval is shown in the knitted document you create. Interpret what that confidence interval tells you._
 
 ```{r}
-#Code goes here. 
+
+z_score95<- 1.96
+stder<-sqrt(insec_p_hat-(1-insec_p_hat)/totPop)
+stder_num<-(insec_p_hat*(1-insec_p_hat))
+MargErr = (sqrt(stder_num/totPop)*z_score95)
+
+
+# SE= sample standard deviation/sqrt(sample)
+CI_upper = insec_p_hat + MargErr
+CI_lower = insec_p_hat - MargErr
 ```
 
-{Interpretation goes here.}
+A confidence interval of 95% yields us values of (0.1517, 0.1539). The range presented as percentages is 15.17% and 15.39%. This represents the percentage of people who fall within the "insecure" population.
 
 ###Part 2: Analyzing state food insecurity data###
 
-We can also use the "STATE" variable to calculate rates for each state. You can adapt the code from question 1 above to include STATE as a second grouping varirable. 
+We can also use the "STATE" variable to calculate rates for each state. You can adapt the code from question 1 above to include STATE as a second grouping variable. 
 
 **Question 3 (5 points)** _Create an estimated food insecurity rate for each state from these data. To do so, you'll need to create counts for each response (food secure, low food security, very low food insecurity), and transform the data so all three are in the same row (rather than spread out the long way across three rows). You can then sum the latter two variables and divide by the total responses within each state. Call the head of your table when done using kable._
 
 ```{r}
-#Code goes here.
+
+food_sec_rates<-cps_data%>%
+  filter(FSSTATUS_cat != "NA")%>%
+  group_by(STATE)%>%
+  summarise(sec_count = sum(FSSTATUS == 1), 
+            lowsec_cnt = sum(FSSTATUS == 2), 
+            vlowsec_cnt = sum(FSSTATUS == 3), 
+            insec_cnt = sum(lowsec_cnt + vlowsec_cnt), 
+            tot_pop = sum(sec_count + insec_cnt))%>%
+  ungroup()%>%
+  select(STATE, sec_count, insec_cnt, tot_pop)%>%
+  mutate(insec_rate = (insec_cnt/tot_pop))
+  
+  #mutate(totpop = sum(sec_count + lowsec_cnt + vlowsec_cnt))
+
+kable(head(food_sec_rates))
+
 ```
 
 
 **Question 4 (2 points)** _Create code that estimates the error term (the standard error * the z score for 95% confidence) for each state._
 
 ```{r}
-#Code goes here
+ME_estimator<-food_sec_rates%>%
+  mutate(Margin_Error = 1.96 * sqrt((insec_rate*(1-insec_rate))/tot_pop))%>%
+  mutate(ci_low = insec_rate - Margin_Error)%>%
+  mutate(ci_high = insec_rate + Margin_Error)
 ```
 
 **Question 5 (2 points** _Explain the purpose of each function you used in question 4._
 
-{Explanation goes here}
+Most of the leg-work so to speak was already finished. I used the food_sec_rates data frame I created in order to utilize the sample proportion column (insec_rate) I had already created. I used the mutate function in order to create a new column with the new calculated Margin of Error for each state. I used mutate to preserve the data from the food_sec_rates df while adding a new column. Within the mutate function is the formula required to calculate the margin of error from the preexisting data from the food_sec_rates df.
 
 **Question 6 (2 points)** _Create a graph of the confidence intervals from question 4 using ggplot, geom_line, and geom_point as shown in class. Arrange the states along the y axis based on the estimated food insecurity rate. See the code shared in class lectures for a template to work from._
 
 ```{r}
-#Code goes here
+graph_df<-ME_estimator%>%
+  pivot_longer(c(ci_low, ci_high), names_to = "ci", values_to = "Estimate")
+  
+ggplot(graph_df)+
+  geom_line(aes(x=Estimate, y = reorder(STATE, insec_rate), group=STATE))+
+  geom_point(aes(x=insec_rate, y = STATE))
 ```
+
 
 **Question 7 (3 points)** _Compare the margin of error (error term) you calculated for Georgia to the national margin of error. How do they differ? Mathematically, why are they different?_
 
-{Explanation goes here.}
+Georgia appears to have a larger number for its margin of error. The national margin of error is smaller because the calculation for it factors in many more observations and a larger data set that is normalized by its size. Georgia, by comparison, has fewer observations with which to calculate the sample proportion. Because of this, the sample proportion is effected more heavily by each observation compared to the proportion found for the entire country. The bigger the sample, the smaller the CI.
 
 **Question 8 (3 points)** _Create a column in your state food insecurity estimates that converts each state's food insecurity rate to a z score based on the whole population. What is the z score for New Jersey? What does that z score tell you?_
 
 ```{r}
-#Code goes here.
+zscore_calc<-ME_estimator%>%
+  mutate(mean_insec=mean(insec_rate))%>%
+  mutate(stddev=sd(insec_rate))%>%
+  mutate(state_zscore = (insec_rate - mean_insec)/stddev)
 ```
 
-{Explanation goes here.}
+The Z score tells us how far each data value is from the mean of a data set using Standard Deviation as the basis of measurement. The Z-score for the state of New Jersey is -1.123563981, which indicates that it is 1.124 standard deviations below the mean score for all states.
 
 ###Part 3: Sampling###
 
 ***Question 9 (3 points)*** _Preliminary data from a state health survey showed a food insecurity rate of 19%. Using the distribution of state food insecurity rates as a reference, what is the percentile rank of this value? You will need to calculate the mean and standard deviation of the existing state rates to answer this question. Use the scripts/lectures on probability distributions as a reference._
 
 ```{r}
-#Code goes here
+pct_rank<-pnorm(.19, mean = zscore_calc$mean_insec, sd = zscore_calc$stddev)
 ```
 
-{State the percentile ranking here.}
+Percentile rank falls within the 90th percentile.
 
 **Question 10 (3 points)** _Health officials would like to do a related survey of household food insecurity in Atlanta with enough responses to allow for margins of error under 2% (with 95% confidence). Assume that the rate is similar to the one you identified for Georgia in question 5.  Use R to compute how big a sample they would need._ 
 
 ```{r}
-#Code goes here.
+ATL_samp_size<-(1.96^2/.02^2) * (.17367540 * (1-.17367540))
 ```
 
 **Extra credit!! (2 points)**
 A geojson file of state boundaries is included in this lab repo. Using the state rate estimates you created for question 3, create a map that shows these rates. You'll have to join your estimates to the state boundaries before you visualize them.
 
 ```{r}
-#Code goes here
+state_boundaries<-st_read("data/USstates.geojson")
+
+#Start with spatial object and then join non-spatial data to it.
+spat_join<-state_boundaries%>%
+  inner_join(food_sec_rates)
+
+tm_shape(spat_join)+
+  tm_polygons("insec_rate", style = "jenks")
 ```
 
 
